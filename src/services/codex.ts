@@ -50,6 +50,7 @@ const toJsonFallback = (input: string, projectKey: string): ComposedTask => {
     rawInput: input
   };
 };
+const getCodexModel = () => process.env.CODEX_MODEL?.trim() || "gpt-5.3-codex-spark";
 
 const extractJson = (value: string): string => {
   const codeBlockMatch = /```json([\s\S]*?)```/i.exec(value);
@@ -106,7 +107,7 @@ export const resolveProjectWithCodex = async (
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.CODEX_MODEL || "gpt-4o-mini",
+      model: getCodexModel(),
       messages: [
         {
           role: "system",
@@ -184,7 +185,7 @@ export const composeTaskPayload = async (
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.CODEX_MODEL || "gpt-4o-mini",
+      model: getCodexModel(),
       messages: [
         {
           role: "system",

@@ -272,10 +272,6 @@ const resolveProject = async (
   text: string
 ): Promise<{ project: ParsedProjectResult; boundProject: ChatBinding | null }> => {
   const parsed = parseProjectFromText(text, instance);
-  if (parsed.status === "resolved") {
-    return { project: parsed, boundProject: null };
-  }
-
   const codexProjectKey = await resolveProjectWithCodex(instance.projects, parsed.text || text, parsed.hint);
   if (codexProjectKey) {
     const codexProject = mapProjectByKey(instance, codexProjectKey);
@@ -291,8 +287,12 @@ const resolveProject = async (
       };
     }
   }
-  console.log("dkwdw");
-  logger.info("dkwdw", {
+
+  if (parsed.status === "resolved") {
+    return { project: parsed, boundProject: null };
+  }
+
+  logger.info("project_route_fallback", {
     instanceId: instance.id,
     parsedStatus: parsed.status,
     hint: parsed.hint,
@@ -350,15 +350,6 @@ const resolveAndCreate = async (
   const resolution = await resolveProject(state, context.instance, context.chatId, input);
 
   if (resolution.project.status !== "resolved") {
-    state.pendingStore.setProjectRequest(context.key, {
-      instanceId: context.instanceId,
-      chatId: context.chatId,
-      userId: context.userId,
-      originalText: input,
-      sourceType: transcribeMeta ? "voice" : "text",
-      createdAt: new Date().toISOString()
-    });
-
     const suggestion =
       resolution.project.alternatives && resolution.project.alternatives.length > 0
         ? `Возможно, ты имел в виду: ${resolution.project.alternatives.map((p) => p.key).join(", ")}`
@@ -607,24 +598,8 @@ const handleTextMessage = async (ctx: Context, instance: TeamInstanceConfig) => 
     return;
   }
 
-  const projectRequest = appState.pendingStore.getProjectRequest(key);
-  if (projectRequest) {
-    const resolved = parseProjectFromText(messageText, instance);
-    if (resolved.status !== "resolved") {
-      appState.pendingStore.setProjectRequest(key, projectRequest);
-      await sendSafeReply(ctx, "Сначала укажи проект в формате [PROJECT] Текст задачи.");
-      return;
-    }
-
-    appState.pendingStore.deleteProjectRequest(key);
-    const recomposed = `${resolved.project?.key} ${resolved.text}`;
-    await processIncomingText(ctx, context, recomposed);
-    return;
-  }
-
   try {
-    await resolveAndCreate(appState, context, messageText);
-    await sendSafeReply(ctx, `Задача создана через проектный routing.`);
+    await processIncomingText(ctx, context, messageText);
   } catch (error) {
     if (error instanceof PendingDraftAction) {
       appState.pendingStore.setApproval(context.key, {
@@ -718,43 +693,6 @@ const handleVoiceMessage = async (ctx: Context, instance: TeamInstanceConfig) =>
     return;
   }
 
-  const stored = appState.pendingStore.getProjectRequest(key);
-  const routeSource = caption || stored?.originalText || "";
-  if (!routeSource) {
-    await sendSafeReply(ctx, "Сначала укажи проект в тексте: [PROJECT] описание задачи, затем приложи голос.");
-    return;
-  }
-
-  const resolution = parseProjectFromText(routeSource, instance);
-  if (resolution.status !== "resolved") {
-    if (!stored) {
-      appState.pendingStore.setProjectRequest(key, {
-        instanceId: instance.id,
-        chatId,
-        userId,
-        originalText: routeSource,
-        sourceType: "voice",
-        createdAt: new Date().toISOString()
-      });
-    }
-    const suggestion =
-      resolution.alternatives && resolution.alternatives.length > 0
-        ? `Возможно: ${resolution.alternatives.map((p) => p.key).join(", ")}`
-        : `Доступные проекты:\n${formatProjectList(instance)}`;
-    await sendSafeReply(ctx, `Не определен проект в голосовом сообщении. ${suggestion}`);
-    return;
-  }
-
-  if (!resolution.project?.key) {
-    await sendSafeReply(ctx, "Проект не найден для голосового сообщения.");
-    return;
-  }
-
-  const project = resolution.project;
-  const projectPrefix = `${project.key} ${resolution.text || ""}`.trim();
-
-  await sendSafeReply(ctx, `Распознаю голос для проекта ${project.key}...`);
-
   const file = await ctx.telegram.getFile(mediaFileId);
   const fileUrl = await ctx.telegram.getFileLink(file.file_id);
 
@@ -766,12 +704,8 @@ const handleVoiceMessage = async (ctx: Context, instance: TeamInstanceConfig) =>
     });
 
     const transcript = await transcribeAudioFile(fileUrl.toString());
-    const combinedText =
-      projectPrefix.length > project.key.length
-        ? `${projectPrefix}\n${transcript.text}`
-        : `${project.key} ${transcript.text}`;
-
-    await processIncomingVoiceText(ctx, context, combinedText.trim(), transcript);
+    const combinedText = caption ? `${caption}\n${transcript.text}`.trim() : transcript.text.trim();
+    await processIncomingVoiceText(ctx, context, combinedText, transcript);
   });
 };
 
@@ -823,12 +757,19 @@ const bootInstance = async (instance: TeamInstanceConfig) => {
     await sendSafeReply(
       ctx,
       `Привет! Я создаю задачи в Linear для команды ${instance.name}.\n` +
-        `Пример: [WEB] Починить главный экран\nДополнительно: project:OPS Перенос в прод\n\nДоступные проекты:\n${formatProjectList(instance)}`
+        `Напиши задачу как обычно — теперь проект определяет Codex автоматически по тексту.\n` +
+        `Пример: Добавить кнопку на лендинг\n` +
+        `Пример: Перенос в прод для проекта OPS\n\n` +
+        `Доступные проекты:\n${formatProjectList(instance)}`
     );
   });
 
   bot.help(async (ctx) => {
-    await sendSafeReply(ctx, "Если проект не указан явно, буду использовать последний для этого чата. Формат: [PROJECT] Текст задачи");
+    await sendSafeReply(
+      ctx,
+      "Отправь текст задачи, Codex сам определит проект по названию и контексту. " +
+      "Если явно хочешь, можешь упомянуть project:OPS или [OPS], но это необязательно."
+    );
   });
 
   bot.command("projects", async (ctx) => {

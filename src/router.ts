@@ -121,12 +121,74 @@ const transliterationMap: Record<string, string> = {
   ю: "yu",
   я: "ya"
 };
+const reverseTransliterationPairs: Array<[string, string]> = [
+  ["shch", "щ"],
+  ["zh", "ж"],
+  ["kh", "х"],
+  ["ts", "ц"],
+  ["ch", "ч"],
+  ["sh", "ш"],
+  ["ya", "я"],
+  ["yu", "ю"],
+  ["yo", "ё"],
+  ["ye", "е"],
+  ["a", "а"],
+  ["b", "б"],
+  ["v", "в"],
+  ["g", "г"],
+  ["d", "д"],
+  ["e", "е"],
+  ["z", "з"],
+  ["i", "и"],
+  ["y", "й"],
+  ["k", "к"],
+  ["l", "л"],
+  ["m", "м"],
+  ["n", "н"],
+  ["o", "о"],
+  ["p", "п"],
+  ["r", "р"],
+  ["s", "с"],
+  ["t", "т"],
+  ["u", "у"],
+  ["f", "ф"],
+  ["h", "х"],
+  ["c", "ц"],
+  ["j", "й"],
+  ["q", "к"],
+  ["w", "в"],
+  ["x", "кс"]
+];
+const reversePairsSorted = [...reverseTransliterationPairs].sort((a, b) => b[0].length - a[0].length);
 const transliterate = (value: string) => {
   return value
     .toLowerCase()
     .split("")
     .map((char) => transliterationMap[char] ?? char)
     .join("");
+};
+const reverseTransliterate = (value: string) => {
+  const direct = toLowerTrim(value);
+  if (!/^[a-z0-9]+$/.test(direct)) {
+    return "";
+  }
+
+  let result = "";
+  for (let i = 0; i < direct.length;) {
+    const chunk = reversePairsSorted.find((entry) => {
+      const [latin] = entry;
+      return direct.startsWith(latin, i);
+    });
+    if (chunk) {
+      const [latin, cyrillic] = chunk;
+      result += cyrillic;
+      i += latin.length;
+      continue;
+    }
+    result += direct[i];
+    i += 1;
+  }
+  return result;
 };
 const normalizeAliasPart = (value: string) => {
   return toLowerTrim(value)
@@ -147,6 +209,10 @@ const aliasVariants = (value: string) => {
   if (spaced) {
     distinct.add(toLowerTrim(spaced));
     distinct.add(transliterate(spaced));
+  }
+  const reversed = reverseTransliterate(direct);
+  if (reversed) {
+    distinct.add(reversed);
   }
 
   return Array.from(distinct).filter(Boolean);
