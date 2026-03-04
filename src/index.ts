@@ -280,7 +280,12 @@ const resolveProject = async (
       reason: "LLM did not return project key"
     });
     return {
-      project: parsed,
+      project: {
+        status: "needs_hint",
+        text: parsed.text,
+        hint: parsed.hint,
+        alternatives: parsed.alternatives
+      },
       boundProject: null
     };
   }

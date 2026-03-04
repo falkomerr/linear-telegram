@@ -95,6 +95,20 @@ const shouldUseCodexCli = (): boolean => {
   return false;
 };
 
+const resolveCodexCliEnv = () => {
+  const proxy = env("CODEX_CLI_PROXY", env("HTTPS_PROXY", env("ALL_PROXY")));
+  if (!proxy) {
+    return { ...process.env };
+  }
+
+  return {
+    ...process.env,
+    HTTP_PROXY: proxy,
+    HTTPS_PROXY: proxy,
+    ALL_PROXY: proxy
+  };
+};
+
 const runCodexCli = async (request: CodexRequest): Promise<string | null> => {
   if (!shouldUseCodexCli()) {
     return null;
@@ -102,6 +116,8 @@ const runCodexCli = async (request: CodexRequest): Promise<string | null> => {
 
   const command = env("CODEX_CLI_PATH", "codex").trim() || "codex";
   const timeoutMs = Number(env("CODEX_CLI_TIMEOUT_MS", "60000"));
+  const cwd = env("CODEX_CLI_WORKING_DIR", process.cwd()).trim() || process.cwd();
+  const cliEnv = resolveCodexCliEnv();
 
   const tmpPath = await mkdtemp(join(tmpdir(), "codex-cli-"));
   const schemaPath = join(tmpPath, "schema.json");
@@ -114,6 +130,9 @@ const runCodexCli = async (request: CodexRequest): Promise<string | null> => {
       command,
       [
         "exec",
+        "--skip-git-repo-check",
+        "-C",
+        cwd,
         "--json",
         "--output-schema",
         schemaPath,
@@ -122,6 +141,7 @@ const runCodexCli = async (request: CodexRequest): Promise<string | null> => {
         request.prompt
       ],
       {
+        env: cliEnv,
         timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60000,
         maxBuffer: 1024 * 1024
       }
