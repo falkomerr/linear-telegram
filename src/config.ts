@@ -12,6 +12,31 @@ const normalizeInstance = (raw: Record<string, unknown>): TeamInstanceConfig => 
     throw new Error("Invalid instance config format");
   }
 
+  const normalizeUserIds = (value: unknown): number[] | undefined => {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+
+    const ids = value
+      .map((item) => {
+        if (typeof item === "number" && Number.isFinite(item)) {
+          return item;
+        }
+
+        if (typeof item === "string") {
+          const parsed = Number(item.trim());
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+
+        return NaN;
+      })
+      .filter((item) => Number.isFinite(item) && Number.isInteger(item)) as number[];
+
+    return ids.length ? ids : undefined;
+  };
+
   const routePolicyRaw =
     typeof raw.routePolicy === "string" && routePolicyRawRawAllowed(raw.routePolicy)
       ? raw.routePolicy
@@ -24,6 +49,7 @@ const normalizeInstance = (raw: Record<string, unknown>): TeamInstanceConfig => 
     linearApiToken: String(raw.linearApiToken ?? ""),
     linearTeamId: String(raw.linearTeamId ?? ""),
     defaultProjectId: raw.defaultProjectId ? String(raw.defaultProjectId) : undefined,
+    allowedUserIds: normalizeUserIds((raw as { allowedUserIds?: unknown }).allowedUserIds),
     routePolicy: routePolicyRaw,
     projects: Array.isArray(raw.projects)
       ? raw.projects

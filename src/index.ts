@@ -12,7 +12,7 @@ import {
 import { ChatBindingStore } from "./storage/chat-binding-store.js";
 import { PendingStore } from "./storage/pending-store.js";
 import { SimpleQueue } from "./services/queue.js";
-import { composeTaskPayload } from "./services/codex.js";
+import { composeTaskPayload, resolveProjectWithCodex } from "./services/codex.js";
 import { createLinearIssue } from "./services/linear.js";
 import { loadConfig } from "./config.js";
 import { parseProjectFromText } from "./router.js";
@@ -152,11 +152,96 @@ const buildConfirmationMessage = (payload: ComposedTask, url?: string) => {
   lines.push(
     "",
     "approve — создать задачу",
+    "/approve — создать задачу",
     "edit <новый текст> — исправить и пересобрать",
-    "cancel — отменить"
+    "/edit <новый текст> — исправить и пересобрать",
+    "cancel — отменить",
+    "/cancel — отменить"
   );
 
   return lines.join("\n");
+};
+
+const isUserAuthorized = (instance: TeamInstanceConfig, userId: number): boolean => {
+  if (!instance.allowedUserIds || instance.allowedUserIds.length === 0) {
+    return true;
+  }
+  return instance.allowedUserIds.includes(userId);
+};
+
+const parseApprovalCommand = (rawText: string) => {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return { type: "empty" as const };
+  }
+
+  const normalized = trimmed.replace(/^\//, "").trim();
+  const normalizedLower = normalized.toLowerCase();
+  const pieces = normalizedLower.split(/\s+/);
+  const command = pieces[0] ?? "";
+  const tail = normalized.substring(command.length).trim();
+
+  if (["approve", "create", "да", "yes"].includes(command)) {
+    return { type: "approve" as const };
+  }
+
+  if (["cancel", "нет", "no", "отмена", "отменить"].includes(command)) {
+    return { type: "cancel" as const };
+  }
+
+  if (command === "edit") {
+    return { type: "edit" as const, text: tail };
+  }
+
+  return { type: "unknown" as const, message: "Доступны команды: approve, edit <новый текст>, cancel." };
+};
+
+const ensureAuthorized = async (ctx: Context, instance: TeamInstanceConfig): Promise<boolean> => {
+  const userId = ctx.from?.id;
+  if (!userId) {
+    return false;
+  }
+
+  if (isUserAuthorized(instance, userId)) {
+    return true;
+  }
+
+  logger.warn("access.denied", {
+    instanceId: instance.id,
+    userId,
+    chatId: ctx.chat?.id
+  });
+  await sendSafeReply(ctx, "У вас нет доступа к этому боту.");
+  return false;
+};
+
+const isExplicitProjectHint = (text: string) => {
+  const trimmed = text.trim();
+  return /^\s*\[[^\]]+\]\s+/i.test(trimmed) || /^\s*(project|проект)\s*[:=]\s*([^\s]+)\s+/i.test(trimmed);
+};
+
+const composeEditedText = (
+  instance: TeamInstanceConfig,
+  pendingProjectKey: string,
+  editedRawText: string
+) => {
+  const trimmedText = editedRawText.trim();
+  const parsed = parseProjectFromText(trimmedText, instance);
+
+  if (parsed.status === "resolved") {
+    return `${parsed.project?.key} ${parsed.text || ""}`.trim();
+  }
+
+  if (parsed.status === "unknown" && isExplicitProjectHint(trimmedText)) {
+    const suggestion =
+      parsed.alternatives && parsed.alternatives.length > 0
+        ? `Возможно, ты имел в виду: ${parsed.alternatives.map((p) => p.key).join(", ")}`
+        : `Доступные проекты:\n${formatProjectList(instance)}`;
+
+    throw new Error(`Не распознал проект ${parsed.hint || ""}. ${suggestion}`);
+  }
+
+  return `${pendingProjectKey} ${trimmedText}`.trim();
 };
 
 const createIssueWithLinear = async (
@@ -190,6 +275,29 @@ const resolveProject = async (
   if (parsed.status === "resolved") {
     return { project: parsed, boundProject: null };
   }
+
+  const codexProjectKey = await resolveProjectWithCodex(instance.projects, parsed.text || text, parsed.hint);
+  if (codexProjectKey) {
+    const codexProject = mapProjectByKey(instance, codexProjectKey);
+    if (codexProject) {
+      return {
+        project: {
+          status: "resolved",
+          project: codexProject,
+          text: parsed.text || text,
+          hint: parsed.hint
+        },
+        boundProject: null
+      };
+    }
+  }
+  console.log("dkwdw");
+  logger.info("dkwdw", {
+    instanceId: instance.id,
+    parsedStatus: parsed.status,
+    hint: parsed.hint,
+    textLength: text.length
+  });
 
   const bound = await state.bindingStore.getProjectForChat(instance.id, chatId);
   if (bound && shouldAutoUseLastProject(instance)) {
@@ -315,9 +423,12 @@ const finalizeApproval = async (ctx: Context, key: string, actionText: string) =
       `${pending.instanceId}:${pending.chatId}:${pending.userId}:${pending.createdAt}`
     ).slice(0, 12);
 
-    const action = actionText.trim().toLowerCase();
+    const action = parseApprovalCommand(actionText);
+    if (!action) {
+      return;
+    }
 
-    if (["approve", "approve ✅", "да", "create", "создать"].includes(action)) {
+    if (action.type === "approve") {
       const instance = appState.cfg.instances.find((i) => i.id === pending.instanceId);
       if (!instance) {
         throw new Error("Инстанс не найден");
@@ -349,7 +460,7 @@ const finalizeApproval = async (ctx: Context, key: string, actionText: string) =
       return;
     }
 
-    if (["cancel", "нет", "no", "отмена", "отменить"].includes(action)) {
+    if (action.type === "cancel") {
       appState.pendingStore.deleteApproval(key);
       logger.info("approval.canceled", {
         correlationId: correlationIdValue,
@@ -361,8 +472,8 @@ const finalizeApproval = async (ctx: Context, key: string, actionText: string) =
       return;
     }
 
-    if (action.startsWith("edit")) {
-      const replacement = actionText.replace(/^edit\s*/i, "").trim();
+    if (action.type === "edit") {
+      const replacement = action.text.trim();
       if (!replacement) {
         await sendSafeReply(ctx, "После edit укажи новый текст задачи.");
         return;
@@ -375,6 +486,7 @@ const finalizeApproval = async (ctx: Context, key: string, actionText: string) =
       }
 
       appState.pendingStore.deleteApproval(key);
+      const composedText = composeEditedText(instance, pending.payload.projectKey, replacement);
       const context: PendingContext = {
         key,
         instance,
@@ -383,11 +495,16 @@ const finalizeApproval = async (ctx: Context, key: string, actionText: string) =
         userId: pending.userId,
         correlationId: correlationIdValue
       };
-      await processIncomingText(ctx, context, `${pending.payload.projectKey} ${replacement}`);
+      await processIncomingText(ctx, context, composedText);
       return;
     }
 
-    await sendSafeReply(ctx, 'Напиши "approve", "edit <новый текст>" или "cancel"');
+    if (action.type === "empty") {
+      await sendSafeReply(ctx, "Пустой ввод. Напиши approve, edit <новый текст> или cancel.");
+      return;
+    }
+
+    await sendSafeReply(ctx, `Не понял команду. ${action.message}`);
   } catch (error) {
     logger.error("approval.failed", {
       message: error instanceof Error ? error.message : `${error}`
@@ -461,10 +578,6 @@ const handleTextMessage = async (ctx: Context, instance: TeamInstanceConfig) => 
     return;
   }
 
-  if (!messageText || messageText.startsWith("/")) {
-    return;
-  }
-
   const chatId = ctx.chat.id;
   const userId = ctx.from.id;
   const key = stateKey(instance.id, chatId, userId);
@@ -487,6 +600,10 @@ const handleTextMessage = async (ctx: Context, instance: TeamInstanceConfig) => 
   const approval = appState.pendingStore.getApproval(key);
   if (approval) {
     await finalizeApproval(ctx, key, messageText);
+    return;
+  }
+
+  if (!messageText || messageText.startsWith("/")) {
     return;
   }
 
@@ -587,7 +704,12 @@ const handleVoiceMessage = async (ctx: Context, instance: TeamInstanceConfig) =>
 
   const approval = appState.pendingStore.getApproval(key);
   if (approval) {
-    await finalizeApproval(ctx, key, caption || "cancel");
+    if (caption) {
+      await finalizeApproval(ctx, key, caption);
+      return;
+    }
+
+    await sendSafeReply(ctx, "Для подтверждения задачи пришли текстом: approve, edit <новый текст> или cancel.");
     return;
   }
 
@@ -690,6 +812,12 @@ const processIncomingVoiceText = async (
 
 const bootInstance = async (instance: TeamInstanceConfig) => {
   const bot = new Telegraf(instance.telegramToken);
+
+  bot.use(async (ctx, next) => {
+    if (await ensureAuthorized(ctx, instance)) {
+      return next();
+    }
+  });
 
   bot.start(async (ctx) => {
     await sendSafeReply(

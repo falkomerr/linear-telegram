@@ -20,6 +20,7 @@ export interface TeamInstanceConfig {
   linearApiToken: string;
   linearTeamId: string;
   defaultProjectId?: string;
+  allowedUserIds?: number[];
   projects: ProjectConfig[];
   routePolicy: z.infer<typeof routePolicySchema>;
 }
