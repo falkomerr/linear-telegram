@@ -1,0 +1,27 @@
+{
+  "instances": [
+    {
+      "id": "team-platform",
+      "name": "Платформа",
+      "telegramToken": "YOUR_TELEGRAM_BOT_TOKEN",
+      "linearApiToken": "YOUR_LINEAR_TOKEN",
+      "linearTeamId": "linear-team-id",
+      "routePolicy": "explicit-or-last",
+      "defaultProjectId": "optional-default-project-id",
+      "projects": [
+        {
+          "id": "linear-project-id-1",
+          "key": "WEB",
+          "name": "web",
+          "aliases": ["web", "site", "frontend"]
+        },
+        {
+          "id": "linear-project-id-2",
+          "key": "OPS",
+          "name": "ops",
+          "aliases": ["ops", "operations"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+services:
+  telegram-linear-bot:
+    image: oven/bun:1
+    working_dir: /app
+    command: bun run dist/index.js
+    volumes:
+      - ./dist:/app/dist
+      - ./config:/app/config
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - CONFIG_PATH=/app/config/instances.json
+      - BINDINGS_FILE=/app/data/chat-bindings.json
+    depends_on: []
