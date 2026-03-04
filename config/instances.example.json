@@ -2,10 +2,11 @@
   "instances": [
     {
       "id": "team-platform",
-      "name": "Платформа",
+      "name": "Platform Team",
       "telegramToken": "YOUR_TELEGRAM_BOT_TOKEN",
       "linearApiToken": "YOUR_LINEAR_TOKEN",
       "linearTeamId": "linear-team-id",
+      "allowedUserIds": [],
       "routePolicy": "explicit-or-last",
       "defaultProjectId": "optional-default-project-id",
       "projects": [

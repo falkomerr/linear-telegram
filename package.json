@@ -1,11 +1,14 @@
 {
   "name": "telegram-linear-bot",
   "version": "0.1.0",
+  "description": "Telegram bot that creates Linear issues from text and voice messages",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
+  "license": "MIT",
   "scripts": {
     "build": "bun run tsc -p tsconfig.json",
+    "typecheck": "bun run tsc -p tsconfig.json --noEmit",
     "start": "bun run dist/index.js",
     "dev": "bun run src/index.ts"
   },

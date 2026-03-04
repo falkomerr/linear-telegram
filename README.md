@@ -1,104 +1,90 @@
-# Telegram + Whisper + Codex для создания задач в Linear
+# Telegram Linear Bot
 
-## Что делает
+This repository contains a Telegram bot that creates Linear issues from text and voice messages.
 
-- Принимает сообщения в Telegram (текст и voice).
-- Поддерживает несколько командных инстансов в одном процессе (`instances`).
-- Проект задается в начале сообщения: `[PROJECT] Текст задачи`.
-- Распознает голос через Whisper (OpenAI).
-- Формирует задачу через Codex-compatible API.
-- Создает задачу в Linear.
+The bot supports multiple team instances in one process and project routing through explicit message prefixes.
 
-## Структура
+## What it does
 
-- `src/` — исходный код TypeScript.
-- `config/` — пример конфигурации инстансов (`instances.example.json`).
-- `deploy/` — пример `docker-compose` для запуска контейнера.
-- `Dockerfile` — минимальный образ сборки и запуска.
-- `.env.example` — шаблон переменных окружения.
+- Accepts Telegram text and voice messages.
+- Transcribes voice messages using Whisper.
+- Sends normalized task payloads through a Codex-compatible service.
+- Creates/updates issues in Linear.
+- Supports explicit routing by project prefix.
 
-## Быстрый старт локально
+## Repository structure
 
-1. Установить зависимости
+- `src/` — TypeScript source.
+- `config/` — instance configuration examples.
+- `deploy/` — docker-compose example.
+- `Dockerfile` — build and runtime entry point.
+- `.env.example` — environment template.
+
+## Quick start
+
+1. Install dependencies:
 
 ```bash
 bun install
 ```
 
-2. Скопировать конфигурационный файл и `.env`:
+2. Copy config and env files:
 
 ```bash
 cp config/instances.example.json config/instances.json
 cp .env.example .env
 ```
 
-3. Отредактировать `config/instances.json` и `.env` под ваши команды.
+3. Edit `config/instances.json` and `.env`.
 
-4. Запустить в dev-режиме:
+4. Run in development mode:
 
 ```bash
 bun run dev
 ```
 
-или production-сборка:
+Or run production build + start:
 
 ```bash
 bun run build
 bun run start
 ```
 
-## Конфигурация окружения
+## Routing model
 
-В `.env` нужны ключи:
+Project is resolved from message text in this order:
 
-- `OPENAI_API_KEY` или `CODEX_API_KEY` (для генерации/анализа задач)
-- `LINEAR_API_URL`, если нужна кастомная точка доступа (по умолчанию `https://api.linear.app/graphql`)
-- `CONFIG_PATH` — путь к `config/instances.json` (по умолчанию `./config/instances.json`)
+1. explicit prefix (`PROJECT text`), e.g. `WEB Add landing page`.
+2. explicit `project:...` and `[project] ...` formats.
+3. last selected project for the chat (if available).
 
-Дополнительные переменные:
+If routing is ambiguous or missing, the bot asks for clarification.
 
-- `CODEX_API_URL`
-- `CODEX_MODEL` (по умолчанию `gpt-4o-mini`)
-- `WHISPER_PROVIDER`, `WHISPER_MODEL`
-- `QUEUE_CONCURRENCY`, `POLLING`, `LOG_LEVEL`, `REQUEST_DEDUP_TTL_MS`
+## Environment variables
 
-## Пример запуска двух Telegram-инстансов
+- `OPENAI_API_KEY` or `CODEX_API_KEY`
+- `CODEX_API_URL`, `CODEX_MODEL`
+- `LINEAR_API_TOKEN`, `LINEAR_TEAM_ID` (or fallback env defaults if configured)
+- `CONFIG_PATH`, `BINDINGS_FILE`
+- `QUEUE_CONCURRENCY`, `POLLING`, `POLLING_TIMEOUT`, `LOG_LEVEL`
 
-`linear-telegram` поддерживает мульти-инстанс в одном процессе. Для двух команд добавьте два блока в `instances`:
+## Security notes
 
-```json
-{
-  "instances": [
-    {
-      "id": "smartfish",
-      "name": "SmartFish",
-      "telegramToken": "8687978902:AAE...",
-      "linearApiToken": "lin_api_xxx",
-      "linearTeamId": "<SMARTFISH_LINEAR_TEAM_ID>",
-      "routePolicy": "explicit-or-last",
-      "projects": []
-    },
-    {
-      "id": "millpay",
-      "name": "MillPay",
-      "telegramToken": "8767913261:AAE...",
-      "linearApiToken": "lin_api_xxx",
-      "linearTeamId": "<MILLPAY_LINEAR_TEAM_ID>",
-      "routePolicy": "explicit-or-last",
-      "projects": []
-    }
-  ]
-}
+- Never commit real credentials or secrets.
+- Do not log user messages, tokens, or raw voice text without redaction.
+
+## Development
+
+```bash
+bun run typecheck
+bun run build
+bun run dev
 ```
 
-Если хотите запускать отдельные процессы на разные `.env`, создайте два env-файла с разными `INSTANCES_JSON`/`CONFIG_PATH` и запускайте два `bun run dev`/`bun run start`.
+## Open source docs
 
-## Примечание по безопасности
-
-- `linear`/`telegram`/`openai`/`codex` токены **никогда не хранятся в репозитории**.
-- В репозиторий должны попадать только шаблоны (`.env.example`, примеры `instances.json`, исходный код).
-
-## Ограничения MVP
-
-- Логика редактирования подтверждения (`edit`) базовая.
-- Кнопки Telegram в этом билде не используются.
+- [LICENSE](LICENSE)
+- [CONTRIBUTING](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
+- [SECURITY](SECURITY.md)
+- [CHANGELOG](CHANGELOG.md)
