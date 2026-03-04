@@ -272,7 +272,7 @@ const resolveProject = async (
   text: string
 ): Promise<{ project: ParsedProjectResult; boundProject: ChatBinding | null }> => {
   const parsed = parseProjectFromText(text, instance);
-  const codexProjectKey = await resolveProjectWithCodex(instance.projects, parsed.text || text, parsed.hint);
+  const codexProjectKey = await resolveProjectWithCodex(instance.projects, text, parsed.hint);
   if (codexProjectKey) {
     const codexProject = mapProjectByKey(instance, codexProjectKey);
     if (codexProject) {
@@ -280,7 +280,7 @@ const resolveProject = async (
         project: {
           status: "resolved",
           project: codexProject,
-          text: parsed.text || text,
+          text,
           hint: parsed.hint
         },
         boundProject: null

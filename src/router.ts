@@ -22,6 +22,11 @@ export const parseProjectFromText = (text: string, instance: TeamInstanceConfig)
     return resolveByHint(hint, body, instance);
   }
 
+  const inline = findProjectInText(trimmed, instance);
+  if (inline) {
+    return inline;
+  }
+
   const tokenMatch = /^([^\s]+)\s+([\s\S]+)/.exec(trimmed);
   if (!tokenMatch) {
     if (instance.projects.length === 1) {
@@ -41,6 +46,67 @@ export const parseProjectFromText = (text: string, instance: TeamInstanceConfig)
 
   const candidate = resolveByHint(hint, body, instance);
   return candidate;
+};
+
+const normalizeToken = (value: string) => {
+  return value
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\wа-яА-ЯёЁ0-9_-]+/gu, "")
+    .toLowerCase();
+};
+
+const stripByIndexes = (text: string, indexes: number[]) => {
+  const words = text.split(/\s+/).filter(Boolean);
+  const skip = new Set(indexes);
+  return words.filter((_, index) => !skip.has(index)).join(" ").trim();
+};
+
+const findProjectInText = (text: string, instance: TeamInstanceConfig): ParsedProjectResult | null => {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return null;
+  }
+
+  for (let i = 0; i < words.length; i++) {
+    const token = normalizeToken(words[i]);
+    if (!token) {
+      continue;
+    }
+
+    const byToken = findProjectByAlias(token, instance);
+    if (byToken) {
+      return {
+        status: "resolved",
+        project: byToken,
+        text: stripByIndexes(text, [i]),
+        hint: words[i]
+      };
+    }
+  }
+
+  const markers = ["в", "для", "project", "проект", "по", "на"];
+  for (let i = 0; i < words.length - 1; i++) {
+    const marker = normalizeToken(words[i]);
+    const token = normalizeToken(words[i + 1]);
+    if (!marker || !token) {
+      continue;
+    }
+    if (!markers.includes(marker)) {
+      continue;
+    }
+
+    const byToken = findProjectByAlias(token, instance);
+    if (byToken) {
+      return {
+        status: "resolved",
+        project: byToken,
+        text: stripByIndexes(text, [i, i + 1]),
+        hint: words[i + 1]
+      };
+    }
+  }
+
+  return null;
 };
 
 const resolveByHint = (
