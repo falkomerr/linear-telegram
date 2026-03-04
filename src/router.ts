@@ -109,6 +109,65 @@ const findProjectInText = (text: string, instance: TeamInstanceConfig): ParsedPr
   return null;
 };
 
+const isMostlyCyrillic = (value: string) => /[а-яё]/ui.test(value);
+const isMostlyLatin = (value: string) => /[a-z]/i.test(value);
+
+const levenshteinDistance = (left: string, right: string) => {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+
+  if (a.length === 0) {
+    return b.length;
+  }
+  if (b.length === 0) {
+    return a.length;
+  }
+
+  const matrix = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i += 1) {
+    matrix[i][0] = i;
+  }
+  for (let j = 0; j <= b.length; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const deletion = matrix[i - 1][j] + 1;
+      const insertion = matrix[i][j - 1] + 1;
+      const substitution = matrix[i - 1][j - 1] + cost;
+      matrix[i][j] = Math.min(deletion, insertion, substitution);
+    }
+  }
+
+  return matrix[a.length][b.length];
+};
+
+const isAliasMatch = (candidateAlias: string, knownAlias: string) => {
+  if (!candidateAlias || !knownAlias) {
+    return false;
+  }
+
+  if (candidateAlias === knownAlias) {
+    return true;
+  }
+  if (candidateAlias.includes(knownAlias) || knownAlias.includes(candidateAlias)) {
+    return true;
+  }
+
+  const candidateLatin = transliterate(candidateAlias);
+  const knownLatin = transliterate(knownAlias);
+
+  if (isMostlyCyrillic(candidateAlias) || isMostlyCyrillic(knownAlias)) {
+    if (candidateLatin.length > 3 && knownLatin.length > 3 && Math.abs(candidateLatin.length - knownLatin.length) <= 1) {
+      return levenshteinDistance(candidateLatin, knownLatin) <= 1;
+    }
+  }
+
+  return false;
+};
+
 const resolveByHint = (
   hintRaw: string,
   text: string,
@@ -296,7 +355,7 @@ const findProjectByAlias = (alias: string, instance: TeamInstanceConfig) => {
   return instance.projects.find((project) => {
     const aliases = normalizeAliasList(project.key, project.aliases);
     return aliases.some((knownAlias) =>
-      variants.some((candidate) => knownAlias === candidate || knownAlias.includes(candidate) || candidate.includes(knownAlias))
+      variants.some((candidate) => isAliasMatch(candidate, knownAlias))
     );
   });
 };
