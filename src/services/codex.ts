@@ -5,6 +5,13 @@ import {
   TranscriptionResult
 } from "../models.js";
 import { env } from "../utils.js";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+const execFileAsync = promisify(execFile);
 
 const CODER_SYSTEM_PROMPT = `Ты системный конструктор задач.
 На вход получаешь текст задачи пользователя в чате и служебный контекст.
@@ -32,6 +39,121 @@ const PROJECT_RESOLVER_PROMPT = `Ты - маршрутизатор проект�
 {"projectKey":"ключ проекта","reason":"краткое пояснение"}.
 Если проект однозначно определить нельзя, верни {"projectKey":""}.
 `;
+
+type CodexRequest = {
+  schema: string;
+  prompt: string;
+};
+
+const CODEX_CLI_PROJECT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    projectKey: { type: "string" },
+    reason: { type: "string" }
+  },
+  required: ["projectKey", "reason"]
+};
+
+const CODEX_CLI_TASK_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    projectKey: { type: "string" },
+    title: { type: "string" },
+    description: { type: "string" },
+    priority: { type: "number" },
+    labels: { type: "array", items: { type: "string" } },
+    dueDate: { type: "string" },
+    assignee: { type: "string" },
+    estimate: { type: "number" },
+    state: { type: "string" },
+    confidence: { type: "number" },
+    rawInput: { type: "string" }
+  },
+  required: [
+    "projectKey",
+    "title",
+    "description",
+    "priority",
+    "labels",
+    "dueDate",
+    "assignee",
+    "estimate",
+    "state",
+    "confidence",
+    "rawInput"
+  ]
+};
+
+const shouldUseCodexCli = (): boolean => {
+  const value = env("CODEX_USE_CLI", "").toLowerCase().trim();
+  if (value === "1" || value === "true" || value === "yes" || value === "on") {
+    return true;
+  }
+
+  return false;
+};
+
+const runCodexCli = async (request: CodexRequest): Promise<string | null> => {
+  if (!shouldUseCodexCli()) {
+    return null;
+  }
+
+  const command = env("CODEX_CLI_PATH", "codex").trim() || "codex";
+  const timeoutMs = Number(env("CODEX_CLI_TIMEOUT_MS", "60000"));
+
+  const tmpPath = await mkdtemp(join(tmpdir(), "codex-cli-"));
+  const schemaPath = join(tmpPath, "schema.json");
+  const outputPath = join(tmpPath, "last-message.json");
+
+  try {
+    await writeFile(schemaPath, request.schema, "utf8");
+
+    await execFileAsync(
+      command,
+      [
+        "exec",
+        "--json",
+        "--output-schema",
+        schemaPath,
+        "--output-last-message",
+        outputPath,
+        request.prompt
+      ],
+      {
+        timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60000,
+        maxBuffer: 1024 * 1024
+      }
+    );
+
+    const raw = await readFile(outputPath, "utf8");
+    const candidate = raw.trim();
+    if (!candidate) {
+      return null;
+    }
+
+    return candidate;
+  } catch {
+    return null;
+  } finally {
+    await rm(tmpPath, { recursive: true, force: true });
+  }
+};
+
+const callCodex = async (
+  request: CodexRequest,
+  apiRequestBuilder: () => Promise<string | null>
+) => {
+  if (shouldUseCodexCli()) {
+    const cliResult = await runCodexCli(request);
+    if (cliResult) {
+      return cliResult;
+    }
+  }
+
+  return apiRequestBuilder();
+};
 
 const getCodexModel = () => process.env.CODEX_MODEL?.trim() || "gpt-5.3-codex-spark";
 const resolveCodexSettings = () => {
@@ -89,46 +211,56 @@ export const resolveProjectWithCodex = async (
     return null;
   }
 
-  const settings = resolveCodexSettings();
-  if (!settings) {
-    return null;
-  }
-  const { url, key } = settings;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json"
+  const jsonText = await callCodex(
+    {
+      schema: JSON.stringify(CODEX_CLI_PROJECT_SCHEMA),
+      prompt: `${PROJECT_RESOLVER_PROMPT}\n\n${requestProjectResolver(rawText, projectHint, instanceProjects)}`
     },
-    body: JSON.stringify({
-      model: getCodexModel(),
-      messages: [
-        {
-          role: "system",
-          content: PROJECT_RESOLVER_PROMPT
+    async () => {
+      const settings = resolveCodexSettings();
+      if (!settings) {
+        return null;
+      }
+
+      const { url, key } = settings;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json"
         },
-        {
-          role: "user",
-          content: requestProjectResolver(rawText, projectHint, instanceProjects)
-        }
-      ],
-      temperature: 0.0
-    })
-  });
+        body: JSON.stringify({
+          model: getCodexModel(),
+          messages: [
+            {
+              role: "system",
+              content: PROJECT_RESOLVER_PROMPT
+            },
+            {
+              role: "user",
+              content: requestProjectResolver(rawText, projectHint, instanceProjects)
+            }
+          ],
+          temperature: 0.0
+        })
+      });
 
-  if (!response.ok) {
-    return null;
-  }
+      if (!response.ok) {
+        return null;
+      }
 
-  const raw = (await response.json()) as { choices?: Array<{ message?: { content?: string } }>; content?: unknown };
-  let jsonText = "";
-  const choice = raw.choices?.[0]?.message?.content;
-  if (typeof choice === "string") {
-    jsonText = extractJson(choice);
-  } else if (typeof raw.content === "string") {
-    jsonText = extractJson(raw.content);
-  }
+      const raw = (await response.json()) as { choices?: Array<{ message?: { content?: string } }>; content?: unknown };
+      let extracted = "";
+      const choice = raw.choices?.[0]?.message?.content;
+      if (typeof choice === "string") {
+        extracted = extractJson(choice);
+      } else if (typeof raw.content === "string") {
+        extracted = extractJson(raw.content);
+      }
+
+      return extracted || null;
+    }
+  );
 
   if (!jsonText) {
     return null;
@@ -158,8 +290,6 @@ export const composeTaskPayload = async (
   user: string,
   transcribeMeta?: TranscriptionResult
 ): Promise<ComposedTask> => {
-  const settings = resolveCodexSettings();
-
   const payload = {
     projectKey,
     text,
@@ -168,50 +298,65 @@ export const composeTaskPayload = async (
     user
   };
 
-  if (!settings) {
-    throw new Error(
-      "LLM credentials are not configured. Set CODEX_API_URL/CODEX_API_KEY or OPENAI_API_BASE/OPENAI_API_KEY."
-    );
-  }
-  const { url, key } = settings;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json"
+  const jsonText = await callCodex(
+    {
+      schema: JSON.stringify(CODEX_CLI_TASK_SCHEMA),
+      prompt: `${CODER_SYSTEM_PROMPT}\n\nprojectKey: ${projectKey}\nuser: ${user}\nprojectHint: ${projectHint}\ntext:\n${text}`
     },
-    body: JSON.stringify({
-      model: getCodexModel(),
-      messages: [
-        {
-          role: "system",
-          content: CODER_SYSTEM_PROMPT
+    async () => {
+      const settings = resolveCodexSettings();
+      if (!settings) {
+        throw new Error(
+          "LLM credentials are not configured. Set CODEX_API_URL/CODEX_API_KEY or OPENAI_API_BASE/OPENAI_API_KEY."
+        );
+      }
+      const { url, key } = settings;
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json"
         },
-        {
-          role: "user",
-          content: requestText(projectKey, projectHint, text, user)
-        }
-      ],
-      temperature: 0.2
-    })
-  });
+        body: JSON.stringify({
+          model: getCodexModel(),
+          messages: [
+            {
+              role: "system",
+              content: CODER_SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: requestText(projectKey, projectHint, text, user)
+            }
+          ],
+          temperature: 0.2
+        })
+      });
 
-  if (!response.ok) {
-    throw new Error(`Compose task request failed: ${response.status}`);
-  }
+      if (!response.ok) {
+        throw new Error(`Compose task request failed: ${response.status}`);
+      }
 
-  const raw = (await response.json()) as { choices?: Array<{ message?: { content?: string } }>; content?: unknown };
-  let jsonText = "";
-  const choice = raw.choices?.[0]?.message?.content;
-  if (typeof choice === "string") {
-    jsonText = extractJson(choice);
-  } else if (typeof raw.content === "string") {
-    jsonText = extractJson(raw.content);
-  }
+      const raw = (await response.json()) as { choices?: Array<{ message?: { content?: string } }>; content?: unknown };
+      let extracted = "";
+      const choice = raw.choices?.[0]?.message?.content;
+      if (typeof choice === "string") {
+        extracted = extractJson(choice);
+      } else if (typeof raw.content === "string") {
+        extracted = extractJson(raw.content);
+      }
+
+      if (!extracted) {
+        throw new Error(`Could not extract JSON from LLM response for request: ${JSON.stringify(payload)}`);
+      }
+
+      return extracted;
+    }
+  );
 
   if (!jsonText) {
-    throw new Error(`Could not extract JSON from LLM response for request: ${JSON.stringify(payload)}`);
+    throw new Error("LLM did not return JSON payload.");
   }
 
   try {
