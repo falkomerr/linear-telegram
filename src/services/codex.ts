@@ -4,6 +4,7 @@ import {
   TeamInstanceConfig,
   TranscriptionResult
 } from "../models.js";
+import { env } from "../utils.js";
 
 const CODER_SYSTEM_PROMPT = `Ты системный конструктор задач.
 На вход получаешь текст задачи пользователя в чате и служебный контекст.
@@ -33,6 +34,22 @@ const PROJECT_RESOLVER_PROMPT = `Ты - маршрутизатор проект�
 `;
 
 const getCodexModel = () => process.env.CODEX_MODEL?.trim() || "gpt-5.3-codex-spark";
+const resolveCodexSettings = () => {
+  const codeXUrl = env("CODEX_API_URL");
+  const codeXKey = env("CODEX_API_KEY");
+  const openAiBase = env("OPENAI_API_BASE", "https://api.openai.com/v1");
+  const openAiKey = env("OPENAI_API_KEY");
+
+  const normalizedOpenAiBase = openAiBase.endsWith("/") ? openAiBase.slice(0, -1) : openAiBase;
+  const url = codeXUrl || `${normalizedOpenAiBase}/chat/completions`;
+  const key = codeXKey || openAiKey;
+
+  if (!url || !key) {
+    return null;
+  }
+
+  return { url, key };
+};
 
 const extractJson = (value: string): string => {
   const codeBlockMatch = /```json([\s\S]*?)```/i.exec(value);
@@ -72,16 +89,16 @@ export const resolveProjectWithCodex = async (
     return null;
   }
 
-  const codexUrl = process.env.CODEX_API_URL?.trim();
-  const codexKey = process.env.CODEX_API_KEY?.trim();
-  if (!codexUrl || !codexKey) {
+  const settings = resolveCodexSettings();
+  if (!settings) {
     return null;
   }
+  const { url, key } = settings;
 
-  const response = await fetch(codexUrl, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${codexKey}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -141,8 +158,7 @@ export const composeTaskPayload = async (
   user: string,
   transcribeMeta?: TranscriptionResult
 ): Promise<ComposedTask> => {
-  const codexUrl = process.env.CODEX_API_URL?.trim();
-  const codexKey = process.env.CODEX_API_KEY?.trim();
+  const settings = resolveCodexSettings();
 
   const payload = {
     projectKey,
@@ -152,14 +168,17 @@ export const composeTaskPayload = async (
     user
   };
 
-  if (!codexUrl || !codexKey) {
-    throw new Error("CODEX credentials are not configured");
+  if (!settings) {
+    throw new Error(
+      "LLM credentials are not configured. Set CODEX_API_URL/CODEX_API_KEY or OPENAI_API_BASE/OPENAI_API_KEY."
+    );
   }
+  const { url, key } = settings;
 
-  const response = await fetch(codexUrl, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${codexKey}`,
+      Authorization: `Bearer ${key}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({

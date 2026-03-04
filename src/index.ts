@@ -119,22 +119,6 @@ const mapProjectByKey = (instance: TeamInstanceConfig, key: string) => {
   );
 };
 
-const shouldAutoUseLastProject = (instance: TeamInstanceConfig): boolean => {
-  return instance.routePolicy === "explicit-or-last";
-};
-
-const shouldAutoUseDefaultProject = (instance: TeamInstanceConfig): boolean => {
-  return instance.routePolicy === "explicit-or-last";
-};
-
-const findDefaultProject = (instance: TeamInstanceConfig) => {
-  if (!instance.defaultProjectId) {
-    return null;
-  }
-
-  return instance.projects.find((project) => project.id === instance.defaultProjectId) ?? null;
-};
-
 const buildConfirmationMessage = (payload: ComposedTask, url?: string) => {
   const lines = [
     `Проект: ${payload.projectKey}`,
@@ -289,7 +273,21 @@ const resolveProject = async (
   }
 
   if (parsed.status === "resolved") {
-    return { project: parsed, boundProject: null };
+    logger.warn("project_route_parser_fallback", {
+      instanceId: instance.id,
+      originalText: text,
+      hint: parsed.hint,
+      reason: "LLM did not return project key"
+    });
+    return {
+      project: {
+        status: "needs_hint",
+        text: parsed.text,
+        hint: parsed.hint,
+        alternatives: parsed.alternatives
+      },
+      boundProject: null
+    };
   }
 
   logger.info("project_route_fallback", {
@@ -300,37 +298,23 @@ const resolveProject = async (
   });
 
   const bound = await state.bindingStore.getProjectForChat(instance.id, chatId);
-  if (bound && shouldAutoUseLastProject(instance)) {
-    const boundProject = instance.projects.find((project) => project.id === bound.projectId);
-    if (boundProject) {
-      return {
-        project: {
-          status: "resolved",
-          project: boundProject,
-          text,
-          hint: parsed.hint
-        },
-        boundProject: bound
-      };
-    }
+  if (bound) {
+    logger.info("project_route_fallback_binding_ignored", {
+      instanceId: instance.id,
+      chatId,
+      boundProjectId: bound.projectId
+    });
   }
 
-  if (shouldAutoUseDefaultProject(instance)) {
-    const defaultProject = findDefaultProject(instance);
-    if (defaultProject) {
-      return {
-        project: {
-          status: "resolved",
-          project: defaultProject,
-          text,
-          hint: parsed.hint
-        },
-        boundProject: null
-      };
-    }
-  }
-
-  return { project: parsed, boundProject: bound };
+  return {
+    project: {
+      status: parsed.status,
+      text: parsed.text,
+      hint: parsed.hint,
+      alternatives: parsed.alternatives
+    },
+    boundProject: bound
+  };
 };
 
 const resolveAndCreate = async (
